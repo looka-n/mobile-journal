@@ -1,16 +1,12 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, ScrollView, Text, TextInput, Pressable, StyleSheet } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
 
-const CardViewFull = () => {
-  const navigation = useNavigation();
-
+const CardViewEditable = ({navigation}) => {
   const saveText = () => {
-    console.log('Save')
+    navigation.navigate('CardViewFull')
   };
   const navigateBack = () => {
     console.log('Back')
-    navigation.navigate('CardViewFull')
   };
 
   return (
@@ -128,4 +124,4 @@ const styles = StyleSheet.create({
   }
 });
 
-export default CardViewFull;
+export default CardViewEditable;

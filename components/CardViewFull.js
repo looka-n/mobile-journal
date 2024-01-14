@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, ScrollView, Text, TextInput, Pressable, StyleSheet } from 'react-native';
 
-const CardViewFull = () => {
+const CardViewFull = ({navigation}) => {
   const saveText = () => {
-    console.log('Edit')
+    navigation.navigate('CardViewEditable')
   };
   const navigateBack = () => {
     console.log('Back')
@@ -14,18 +14,12 @@ const CardViewFull = () => {
       <ScrollView>
         {/* Title */}
         <View style={styles.titleContainer}>
-          <TextInput style={styles.title}>Placeholder Title</TextInput>
+          <Text style={styles.title}>Placeholder Title</Text>
         </View>
 
         {/* Text entry */}
-        <View style={styles.inputContainer}>
-          <TextInput style={styles.inputText}
-          placeholder='Type here...'
-          placeholderTextColor="#999999"
-          multiline={true}
-          textAlignVertical="top"/>
-        </View>
-
+        <View style={styles.inputContainer} />
+        
         {/* Buttons */}
         <View style={styles.buttonContainer}>
           {/* Back button */}
@@ -57,9 +51,6 @@ const styles = StyleSheet.create({
   titleContainer: {
     marginHorizontal: 20,
     paddingVertical: 10,
-    
-    backgroundColor: '#1d2021',
-    borderRadius: 10
   },
   title: {
     color: '#FFFFFF',
