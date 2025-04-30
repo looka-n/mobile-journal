@@ -20,6 +20,7 @@ export default function EntryScreen() {
     if (!entryId) return;
     const url = await pickImage(entryId);
     if (!url) return;
+    console.log('URL:', url);
     const newPhotos = [...photos, url];
     setPhotos(newPhotos);
     await saveEntry(entryId, newPhotos, entryText);
@@ -45,19 +46,23 @@ export default function EntryScreen() {
         <ImageCarousel images={photos} />
       </View>
 
-      <View style={{ alignItems: 'flex-end', margin: 16 }}>
-        <TouchableOpacity
-          onPress={() => {
-            if (isEditing && entryId) {
-              saveEntry(entryId, photos, entryText);
-            }
-            setIsEditing(!isEditing);
-          }}
-          style={EntryStyles.editIcon}
-        >
-          <Feather name={isEditing ? 'check' : 'edit-3'} size={24} color="#444" />
-        </TouchableOpacity>
-      </View>
+    {/* <View style={{ alignItems: 'flex-end', margin: 16 }}>
+    <TouchableOpacity
+        onPress={() => {
+        if (isEditing && entryId) {
+            saveEntry(entryId, photos, entryText);
+        }
+        setIsEditing(!isEditing);
+        }}
+        style={EntryStyles.editIcon}
+    >
+        <Feather name={isEditing ? 'check' : 'edit-3'} size={24} color="#444" />
+    </TouchableOpacity>
+    </View> */}
+
+    <TouchableOpacity onPress={handleAddPhoto} style={{ marginTop: 12, alignSelf: 'flex-end', marginRight: 16 }}>
+        <Feather name="image" size={24} color="#444" />
+    </TouchableOpacity>
 
       <View style={EntryStyles.markdownContainer}>
         {isEditing ? (

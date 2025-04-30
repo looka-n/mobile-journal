@@ -1,46 +1,37 @@
-import { storage } from "../firebase/firebaseConfig.js";
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebaseConfig';
 import * as ImagePicker from 'expo-image-picker';
 import uuid from 'react-native-uuid';
 
-// TODO: TEST FUNCTION
 export async function pickImage(entryId) {
-  console.log('🔍 Starting image upload');
+  console.log('📸 Launching image picker...');
 
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ['images'],
+    base64: true, // ✅ MUST be true
     quality: 1,
-    base64: true, // ✅ required for uploadString
-    allowsEditing: true,
-    aspect: [4, 3],
   });
 
-  if (result.canceled) {
-    console.log('🚫 Picker canceled');
+  if (result.canceled || !result.assets?.[0]?.base64) {
+    console.log('❌ No image picked or missing base64.');
     return null;
   }
 
   const asset = result.assets[0];
-
-  if (!asset.base64) {
-    console.error('🚫 No base64 data returned.');
-    return null;
-  }
-
+  const base64DataUrl = `data:image/jpeg;base64,${asset.base64}`; // ✅ make it a real data URL
   const filename = `${entryId}-${uuid.v4()}.jpg`;
   const imageRef = ref(storage, `journal_photos/${filename}`);
 
   try {
-    await uploadString(imageRef, asset.base64, 'base64', {
-      contentType: 'image/jpeg',
-    });
+    console.log('☁️ Uploading as data_url...');
+    await uploadString(imageRef, base64DataUrl, 'data_url'); // ✅ data_url instead of base64
+    console.log('✅ Upload complete.');
 
-    console.log('☁️ Uploaded to Firebase Storage');
     const url = await getDownloadURL(imageRef);
     console.log('✅ Download URL:', url);
     return url;
   } catch (err) {
-    console.error('💥 Upload failed:', err);
+    console.error('🔥 Upload failed:', err);
     return null;
   }
 }

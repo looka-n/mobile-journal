@@ -33,7 +33,7 @@ export default function EntryGrid() {
     const load = async () => {
       const firestore = await getAllEntries();
       setFirestoreData(firestore);
-      loadMoreDates(firestore); // initial chunk
+      loadMoreDates(firestore);
     };
     load();
   }, []);
