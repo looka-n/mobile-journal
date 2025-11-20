@@ -1,12 +1,13 @@
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Dimensions, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-
+import { doc, getDoc } from "firebase/firestore";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Dimensions, FlatList, ImageBackground, Pressable, StyleSheet, Text, View } from "react-native";
+import { db } from "../firebase/FirebaseConfig"; // path is ../firebase from /app
+// --- existing helpers & constants from your file ---
 const { width } = Dimensions.get("window");
 const GAP = 2;
 const ITEM_SIZE = Math.floor((width - GAP * 4) / 3);
 const PAGE_SIZE = 90;
-
 const toISODate = (d: Date) => d.toISOString().slice(0, 10);
 const utcToday = () => {
   const now = new Date();
@@ -22,11 +23,54 @@ const formatMDY = (iso: string) => {
   return `${m}-${d}-${y}`;
 };
 
+// Small cell component that caches covers per date
+const DateCell = memo(function DateCell({
+  date,
+  onPress,
+  cache,
+}: {
+  date: string;
+  onPress: () => void;
+  cache: React.MutableRefObject<Map<string, string | null>>;
+}) {
+  const [cover, setCover] = useState<string | null | undefined>(cache.current.get(date));
+
+  useEffect(() => {
+    let mounted = true;
+    const cached = cache.current.get(date);
+    if (cached !== undefined) {
+      setCover(cached);
+      return;
+    }
+    (async () => {
+      const snap = await getDoc(doc(db, "entries", date));
+      const url = (snap.exists() && (snap.data() as any).coverUrl) || null;
+      cache.current.set(date, url);
+      if (mounted) setCover(url);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [date, cache]);
+
+  return (
+    <Pressable style={styles.box} onPress={onPress}>
+      {cover ? (
+        <ImageBackground source={{ uri: cover }} style={styles.bg} />
+      ) : null}
+      <View style={styles.datePill}>
+        <Text style={styles.dateText}>{formatMDY(date)}</Text>
+      </View>
+    </Pressable>
+  );
+});
+
 export default function Index() {
   const router = useRouter();
   const [dates, setDates] = useState<string[]>([]);
   const startDateRef = useRef<Date>(utcToday());
   const loadedPagesRef = useRef(0);
+  const coverCache = useRef(new Map<string, string | null>());
 
   const seedPage = useCallback((pageIndex: number) => {
     const startOffset = pageIndex * PAGE_SIZE;
@@ -51,11 +95,11 @@ export default function Index() {
   }, [seedPage]);
 
   const renderItem = ({ item }: { item: string }) => (
-    <Pressable style={styles.box} onPress={() => router.push(`/entry/${item}`)}>
-      <View style={styles.datePill}>
-        <Text style={styles.dateText}>{formatMDY(item)}</Text>
-      </View>
-    </Pressable>
+    <DateCell
+      date={item}
+      cache={coverCache}
+      onPress={() => router.push(`/entry/${item}`)}
+    />
   );
 
   return (
@@ -85,6 +129,10 @@ const styles = StyleSheet.create({
     position: "relative",
     overflow: "hidden",
   },
+  bg: {
+    ...StyleSheet.absoluteFillObject,
+    resizeMode: "cover",
+  } as any,
   datePill: {
     position: "absolute",
     right: 6,
