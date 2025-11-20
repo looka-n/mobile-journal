@@ -3,9 +3,14 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { Alert, Button, Image, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, Button, Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import Markdown from "react-native-markdown-display";
 import { auth, db, storage } from "../../firebase/FirebaseConfig";
+
+const SCREEN_WIDTH = Dimensions.get("window").width;
+const CAROUSEL_W = SCREEN_WIDTH - 32;
+const CAROUSEL_H = 360;
 
 const formatMDY = (iso: string) => {
   if (!iso) return "";
@@ -13,27 +18,25 @@ const formatMDY = (iso: string) => {
   return `${m}-${d}-${y}`;
 };
 
+type DraftPhoto = { uri: string; isNew: boolean };
+
 export default function EntryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const display = formatMDY(id || "");
 
-  // mode
   const [isEditing, setIsEditing] = useState(false);
-
-  // remote doc
   const [loaded, setLoaded] = useState(false);
-  const [remoteTitle, setRemoteTitle] = useState<string>("");
-  const [remoteDesc, setRemoteDesc] = useState<string>("");
+  const [remoteTitle, setRemoteTitle] = useState("");
+  const [remoteDesc, setRemoteDesc] = useState("");
   const [remotePhotos, setRemotePhotos] = useState<string[]>([]);
   const [remoteCover, setRemoteCover] = useState<string | null>(null);
+  const [active, setActive] = useState(0);
 
-  // draft (write mode)
   const [title, setTitle] = useState("");
   const [markdown, setMarkdown] = useState("");
-  const [newImages, setNewImages] = useState<string[]>([]);
+  const [draftPhotos, setDraftPhotos] = useState<DraftPhoto[]>([]);
   const [saving, setSaving] = useState(false);
 
-  // ensure anonymous auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u) signInAnonymously(auth).catch(() => {});
@@ -41,7 +44,6 @@ export default function EntryScreen() {
     return unsub;
   }, []);
 
-  // load doc once
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -54,17 +56,11 @@ export default function EntryScreen() {
         setRemoteDesc(d.description || "");
         setRemotePhotos(Array.isArray(d.photos) ? d.photos : []);
         setRemoteCover(d.coverUrl || null);
-        // seed editor with current values
-        setTitle(d.title || "");
-        setMarkdown(d.description || "");
       } else {
-        // new entry defaults
         setRemoteTitle("");
         setRemoteDesc("");
         setRemotePhotos([]);
         setRemoteCover(null);
-        setTitle("");
-        setMarkdown("");
       }
       setLoaded(true);
     })();
@@ -73,11 +69,13 @@ export default function EntryScreen() {
     };
   }, [id]);
 
-  // header buttons
-  useLayoutEffect(() => {
-    // Show Edit/Cancel in header
-    // (Stack.Screen is still used for the title)
-  }, [isEditing]);
+  useEffect(() => {
+    if (isEditing) {
+      setTitle(remoteTitle);
+      setMarkdown(remoteDesc);
+      setDraftPhotos(remotePhotos.map((u) => ({ uri: u, isNew: false })));
+    }
+  }, [isEditing, remoteTitle, remoteDesc, remotePhotos]);
 
   const pickImages = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -88,11 +86,11 @@ export default function EntryScreen() {
     const res = await ImagePicker.launchImageLibraryAsync({
       allowsMultipleSelection: true,
       quality: 0.9,
-      mediaTypes: ["images"], // current API
+      mediaTypes: ["images"],
     });
     if (!res.canceled) {
-      const uris = res.assets.map((a) => a.uri);
-      setNewImages((prev) => prev.concat(uris));
+      const newOnes = res.assets.map((a) => ({ uri: a.uri, isNew: true } as DraftPhoto));
+      setDraftPhotos((prev) => prev.concat(newOnes));
     }
   };
 
@@ -108,35 +106,31 @@ export default function EntryScreen() {
     if (!id) return;
     try {
       setSaving(true);
-      const newURLs = await Promise.all(newImages.map(uploadOne));
+      const newUris = draftPhotos.filter((p) => p.isNew).map((p) => p.uri);
+      const uploaded = await Promise.all(newUris.map(uploadOne));
+      let upIdx = 0;
+      const finalPhotos = draftPhotos.map((p) => (p.isNew ? uploaded[upIdx++] : p.uri));
 
-      // append new photos to existing ones
-      const mergedPhotos = newURLs.length ? [...remotePhotos, ...newURLs] : remotePhotos;
+      let nextCover: string | null = remoteCover;
+      if (!nextCover || !finalPhotos.includes(nextCover)) {
+        nextCover = finalPhotos[0] ?? null;
+      }
 
       const payload: any = {
         id,
         title: title.trim(),
         description: markdown,
+        photos: finalPhotos,
+        coverUrl: nextCover,
         updatedAt: serverTimestamp(),
       };
 
-      if (newURLs.length) {
-        payload.photos = mergedPhotos;
-        // keep existing cover; if none, set to first photo
-        payload.coverUrl = remoteCover ?? mergedPhotos[0] ?? null;
-      }
-
       await setDoc(doc(db, "entries", id), payload, { merge: true });
 
-      // reflect saved state locally
       setRemoteTitle(payload.title);
       setRemoteDesc(payload.description);
-      if (newURLs.length) {
-        setRemotePhotos(mergedPhotos);
-        setRemoteCover(payload.coverUrl ?? remoteCover);
-        setNewImages([]);
-      }
-
+      setRemotePhotos(finalPhotos);
+      setRemoteCover(nextCover);
       setIsEditing(false);
       Alert.alert("Saved", "Your entry has been saved.");
     } catch (e: any) {
@@ -147,8 +141,8 @@ export default function EntryScreen() {
   };
 
   const displayPhotos = useMemo(
-    () => (isEditing ? [...remotePhotos, ...newImages] : remotePhotos),
-    [isEditing, remotePhotos, newImages]
+    () => (isEditing ? draftPhotos.map((p) => p.uri) : remotePhotos),
+    [isEditing, draftPhotos, remotePhotos]
   );
 
   if (!loaded) {
@@ -165,38 +159,73 @@ export default function EntryScreen() {
       <Stack.Screen
         options={{
           title: display || "Entry",
-          headerRight: () =>
-            isEditing ? (
-              <Button title="Cancel" onPress={() => setIsEditing(false)} />
-            ) : (
-              <Button title="Edit" onPress={() => setIsEditing(true)} />
-            ),
+          headerRight: () => (
+            isEditing ? <Button title="Cancel" onPress={() => setIsEditing(false)} /> : <Button title="Edit" onPress={() => setIsEditing(true)} />
+          ),
         }}
       />
 
-      {/* READ MODE */}
       {!isEditing && (
         <View style={{ gap: 12 }}>
           <Text style={styles.title}>{remoteTitle || "Untitled"}</Text>
-          <Text style={styles.body}>{remoteDesc || ""}</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+
+          <View style={styles.dividerContainer}>
+            <View style={styles.divider} />
+          </View>
+
+          <ScrollView
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onScroll={(e) => {
+              const i = Math.round(e.nativeEvent.contentOffset.x / CAROUSEL_W);
+              if (i !== active) setActive(i);
+            }}
+            scrollEventThrottle={16}
+            style={{ width: CAROUSEL_W, height: CAROUSEL_H, alignSelf: "center" }}
+          >
             {remotePhotos.map((uri) => (
-              <Image key={uri} source={{ uri }} style={styles.image} />
+              <Image
+                key={uri}
+                source={{ uri }}
+                style={{ width: CAROUSEL_W, height: CAROUSEL_H, borderRadius: 12, backgroundColor: "#e5e7eb" }}
+                resizeMode="cover"
+              />
             ))}
           </ScrollView>
+
+          {remotePhotos.length > 1 && (
+            <View style={styles.dotsWrap}>
+              {remotePhotos.map((_, i) => (
+                <View key={i} style={[styles.dot, i === active && styles.dotActive]} />
+              ))}
+            </View>
+          )}
+
+          <Markdown style={markdownStyles}>{remoteDesc || ""}</Markdown>
         </View>
       )}
 
-      {/* WRITE MODE */}
       {isEditing && (
         <View style={{ gap: 10 }}>
           <Text style={styles.label}>Title</Text>
-          <TextInput
-            value={title}
-            onChangeText={setTitle}
-            placeholder="A short title"
-            style={styles.input}
-          />
+          <TextInput value={title} onChangeText={setTitle} placeholder="A short title" style={styles.input} />
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 12 }}>
+            {draftPhotos.map((p, i) => (
+              <View key={p.uri + i} style={styles.editThumbWrap}>
+                <Image source={{ uri: p.uri }} style={styles.editThumb} />
+                <Pressable
+                  style={styles.removeBtn}
+                  onPress={() => setDraftPhotos((prev) => prev.filter((_, idx) => idx !== i))}
+                >
+                  <Text style={styles.removeTxt}>✕</Text>
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+
+          <Button title="Add Photos" onPress={pickImages} />
 
           <Text style={styles.label}>Markdown</Text>
           <TextInput
@@ -206,13 +235,6 @@ export default function EntryScreen() {
             style={[styles.input, styles.multiline]}
             multiline
           />
-
-          <Button title="Add Photos" onPress={pickImages} />
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 12 }}>
-            {displayPhotos.map((uri) => (
-              <Image key={uri} source={{ uri }} style={styles.thumb} />
-            ))}
-          </ScrollView>
 
           <Button title={saving ? "Saving..." : "Save"} onPress={onSave} disabled={saving} />
         </View>
@@ -225,12 +247,50 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff", padding: 16, gap: 12 },
   title: { fontSize: 24, fontWeight: "700" },
   body: { fontSize: 16, lineHeight: 22, color: "#111827" },
+
   label: { fontSize: 12, fontWeight: "600", color: "#374151" },
   input: {
-    borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    backgroundColor: "#fff",
   },
   multiline: { height: 140, textAlignVertical: "top" },
+
+  dotsWrap: { flexDirection: "row", alignSelf: "center", gap: 6, marginTop: 8 },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#d1d5db" },
+  dotActive: { backgroundColor: "#111827" },
+
   image: { width: 200, height: 200, borderRadius: 12, marginRight: 10, backgroundColor: "#e5e7eb" },
-  thumb: { width: 100, height: 100, borderRadius: 8, marginRight: 8, backgroundColor: "#e5e7eb" },
+
+  editThumbWrap: { marginRight: 10, width: 120, height: 120 },
+  editThumb: { width: 120, height: 120, borderRadius: 10, backgroundColor: "#e5e7eb" },
+
+  removeBtn: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    backgroundColor: "rgba(0,0,0,0.50)",
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  removeTxt: { color: "#fff", fontWeight: "700", lineHeight: 16 },
+
+  dividerContainer: { paddingBottom: 20 },
+  divider: { height: 2, backgroundColor: "#d1d5db", width: "90%", borderRadius: 1 },
 });
+
+const markdownStyles: Record<string, any> = {
+  body: { fontSize: 16, color: "#111827", lineHeight: 22 },
+  heading1: { fontSize: 24, fontWeight: "700", marginVertical: 8 },
+  heading2: { fontSize: 20, fontWeight: "700", marginVertical: 6 },
+  link: { color: "#2563eb" },
+  list_item: { flexDirection: "row", alignItems: "flex-start" },
+  code_inline: { backgroundColor: "#f3f4f6", borderRadius: 4, paddingHorizontal: 4, fontFamily: "monospace" },
+};
