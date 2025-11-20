@@ -1,13 +1,14 @@
 import { Stack, useRouter } from "expo-router";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Button, Dimensions, FlatList, ImageBackground, Pressable, StyleSheet, Text, View } from "react-native";
+import { Button, Dimensions, FlatList, ImageBackground, Pressable, StyleSheet, Text, View, ViewToken } from "react-native";
 import { db } from "../firebase/FirebaseConfig";
 
 const { width } = Dimensions.get("window");
 const GAP = 2;
 const ITEM_SIZE = Math.floor((width - GAP * 4) / 3);
 const PAGE_SIZE = 90;
+const DAYS_WINDOW = 120;
 
 const toISODate = (d: Date) => d.toISOString().slice(0, 10);
 const utcToday = () => {
@@ -26,32 +27,13 @@ const formatMDY = (iso: string) => {
 
 const DateCell = memo(function DateCell({
   date,
+  cover,
   onPress,
-  coverCache,
-  existCallback,
 }: {
   date: string;
+  cover: string | null | undefined;
   onPress: () => void;
-  coverCache: React.MutableRefObject<Map<string, string | null>>;
-  existCallback: (date: string, exists: boolean) => void;
 }) {
-  const [cover, setCover] = useState<string | null | undefined>(coverCache.current.get(date));
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const snap = await getDoc(doc(db, "entries", date));
-      const exists = snap.exists();
-      existCallback(date, exists);
-      const url = exists ? ((snap.data() as any).coverUrl ?? null) : null;
-      coverCache.current.set(date, url);
-      if (mounted) setCover(url);
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [date, coverCache, existCallback]);
-
   return (
     <Pressable style={styles.box} onPress={onPress}>
       {cover ? <ImageBackground source={{ uri: cover }} style={styles.bg} /> : null}
@@ -66,13 +48,30 @@ export default function Index() {
   const router = useRouter();
   const [dates, setDates] = useState<string[]>([]);
   const [showRealOnly, setShowRealOnly] = useState(false);
-  const [version, setVersion] = useState(0);
+  const [version, setVersion] = useState(0); // bump to refresh cells
 
   const startDateRef = useRef<Date>(utcToday());
   const loadedPagesRef = useRef(0);
   const coverCache = useRef(new Map<string, string | null>());
   const existsCache = useRef(new Map<string, boolean>());
 
+  const ensureLoaded = useCallback(async (date: string) => {
+    if (existsCache.current.has(date)) return; // already known
+    try {
+      const snap = await getDoc(doc(db, "entries", date));
+      const exists = snap.exists();
+      existsCache.current.set(date, exists);
+      coverCache.current.set(
+        date,
+        exists ? ((snap.data() as any).coverUrl ?? null) : null
+      );
+      setVersion((v) => v + 1);
+    } catch (err) {
+      console.warn("ensureLoaded failed for", date, err);
+    }
+  }, []);
+
+  // Seed infinite list
   const seedPage = useCallback((pageIndex: number) => {
     const startOffset = pageIndex * PAGE_SIZE;
     const next: string[] = [];
@@ -95,23 +94,61 @@ export default function Index() {
     loadedPagesRef.current = 0;
   }, [seedPage]);
 
-  const onExistKnown = useCallback((date: string, exists: boolean) => {
-    if (existsCache.current.get(date) !== exists) {
-      existsCache.current.set(date, exists);
-      setVersion((v) => v + 1);
-    }
+  // Realtime listener for recent entries (today .. today-DAYS_WINDOW)
+  useEffect(() => {
+    const today = startDateRef.current;
+    const todayId = toISODate(today);
+    const startId = toISODate(daysAgoUTC(today, DAYS_WINDOW - 1));
+
+    const q = query(
+      collection(db, "entries"),
+      where("id", ">=", startId),
+      where("id", "<=", todayId),
+      orderBy("id", "desc")
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      let changed = false;
+      snap.docChanges().forEach((ch) => {
+        const d = ch.doc.data() as any;
+        const id = d.id as string;
+        if (ch.type === "removed") {
+          if (existsCache.current.has(id)) {
+            existsCache.current.delete(id);
+            coverCache.current.delete(id);
+            changed = true;
+          }
+        } else {
+          existsCache.current.set(id, true);
+          coverCache.current.set(id, d.coverUrl ?? null);
+          changed = true;
+        }
+      });
+      if (changed) setVersion((v) => v + 1);
+    });
+
+    return () => unsub();
   }, []);
 
-  const data = showRealOnly ? dates.filter((d) => existsCache.current.get(d) === true) : dates;
+  const data = showRealOnly
+    ? dates.filter((d) => existsCache.current.get(d) === true)
+    : dates;
 
   const renderItem = ({ item }: { item: string }) => (
     <DateCell
       date={item}
-      coverCache={coverCache}
-      existCallback={onExistKnown}
+      cover={coverCache.current.get(item)}
       onPress={() => router.push(`/entry/${item}`)}
     />
   );
+
+  const viewabilityConfig = { itemVisiblePercentThreshold: 60 };
+
+  const onViewableItemsChanged = useRef(
+    ({ viewableItems }: { viewableItems: ViewToken[]; changed: ViewToken[] }) => {
+      for (const v of viewableItems) ensureLoaded(v.item as string);
+    }
+  ).current;
 
   return (
     <View style={{ flex: 1 }}>
@@ -135,6 +172,8 @@ export default function Index() {
         windowSize={7}
         onEndReached={loadMore}
         onEndReachedThreshold={0.2}
+        viewabilityConfig={viewabilityConfig}
+        onViewableItemsChanged={onViewableItemsChanged}
       />
     </View>
   );

@@ -2,7 +2,7 @@ import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { deleteObject, getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Markdown from "react-native-markdown-display";
@@ -102,20 +102,39 @@ export default function EntryScreen() {
     return await getDownloadURL(objectRef);
   };
 
+  const deleteRemovedBlobs = async (oldUrls: string[], newUrls: string[]) => {
+    const removed = oldUrls.filter((u) => !newUrls.includes(u));
+    if (!removed.length) return;
+    // Best-effort deletes; don’t block the save if one fails
+    await Promise.allSettled(
+      removed.map(async (url) => {
+        try {
+          // ref(...) accepts Storage paths and download URLs
+          const r = ref(storage, url);
+          await deleteObject(r);
+        } catch (err) {
+          console.warn("Delete failed for", url, err);
+        }
+      })
+    );
+  };
+
   const onSave = async () => {
     if (!id) return;
     try {
       setSaving(true);
+
+      // Upload new photos; preserve current draft order
       const newUris = draftPhotos.filter((p) => p.isNew).map((p) => p.uri);
       const uploaded = await Promise.all(newUris.map(uploadOne));
       let upIdx = 0;
       const finalPhotos = draftPhotos.map((p) => (p.isNew ? uploaded[upIdx++] : p.uri));
 
+      // Cover: keep if still present; else first or null
       let nextCover: string | null = remoteCover;
-      if (!nextCover || !finalPhotos.includes(nextCover)) {
-        nextCover = finalPhotos[0] ?? null;
-      }
+      if (!nextCover || !finalPhotos.includes(nextCover)) nextCover = finalPhotos[0] ?? null;
 
+      // Write Firestore first
       const payload: any = {
         id,
         title: title.trim(),
@@ -124,13 +143,17 @@ export default function EntryScreen() {
         coverUrl: nextCover,
         updatedAt: serverTimestamp(),
       };
-
       await setDoc(doc(db, "entries", id), payload, { merge: true });
 
+      // Then clean up removed blobs (best-effort)
+      await deleteRemovedBlobs(remotePhotos, finalPhotos);
+
+      // Reflect saved state locally
       setRemoteTitle(payload.title);
       setRemoteDesc(payload.description);
       setRemotePhotos(finalPhotos);
       setRemoteCover(nextCover);
+
       setIsEditing(false);
       Alert.alert("Saved", "Your entry has been saved.");
     } catch (e: any) {
