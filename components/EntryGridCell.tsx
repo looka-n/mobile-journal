@@ -1,6 +1,22 @@
-import { memo } from "react";
-import { ImageBackground, Pressable, StyleSheet, Text, View } from "react-native";
+import { memo, useEffect, useRef } from "react";
+import {
+  Animated,
+  ImageBackground,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { formatMDY } from "../hooks/useEntriesFeed";
+
+type Props = {
+  date: string;
+  cover?: string | null;
+  onPress: () => void;
+  size: number;
+  gap: number;
+  index: number;
+};
 
 export const EntryGridCell = memo(function EntryGridCell({
   date,
@@ -8,20 +24,48 @@ export const EntryGridCell = memo(function EntryGridCell({
   onPress,
   size,
   gap,
-}: {
-  date: string;
-  cover?: string | null;
-  onPress: () => void;
-  size: number;
-  gap: number;
-}) {
+  index,
+}: Props) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(12)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 220,
+        delay: index * 35,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: 220,
+        delay: index * 35,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [index, opacity, translateY]);
+
   return (
-    <Pressable style={[styles.box, { width: size, height: size, margin: gap }]} onPress={onPress}>
-      {cover ? <ImageBackground source={{ uri: cover }} style={styles.bg} /> : null}
-      <View style={styles.datePill}>
-        <Text style={styles.dateText}>{formatMDY(date)}</Text>
-      </View>
-    </Pressable>
+    <Animated.View
+      style={[
+        styles.box,
+        {
+          width: size,
+          height: size,
+          margin: gap,
+          opacity,
+          transform: [{ translateY }],
+        },
+      ]}
+    >
+      <Pressable style={{ flex: 1 }} onPress={onPress}>
+        {cover ? <ImageBackground source={{ uri: cover }} style={styles.bg} /> : null}
+        <View style={styles.datePill}>
+          <Text style={styles.dateText}>{formatMDY(date)}</Text>
+        </View>
+      </Pressable>
+    </Animated.View>
   );
 });
 

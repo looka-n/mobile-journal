@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { db } from "../firebase/FirebaseConfig";
 
 type UseEntriesFeedOpts = {
-  daysWindow?: number; // realtime listen window
-  pageSize?: number;   // infinite scroller page size
+  daysWindow?: number;
+  pageSize?: number;
 };
 
 const toISODate = (d: Date) => d.toISOString().slice(0, 10);
@@ -22,29 +22,29 @@ export function useEntriesFeed(opts: UseEntriesFeedOpts = {}) {
   const DAYS_WINDOW = opts.daysWindow ?? 120;
   const PAGE_SIZE = opts.pageSize ?? 90;
 
-  // infinite date list
   const [dates, setDates] = useState<string[]>([]);
   const startDateRef = useRef<Date>(utcToday());
   const loadedPagesRef = useRef(0);
 
-  // caches
   const coverCache = useRef(new Map<string, string | null>());
   const titleCache = useRef(new Map<string, string | undefined>());
   const existsCache = useRef(new Map<string, boolean>());
 
-  // UI flags
   const [version, setVersion] = useState(0);
   const [showRealOnly, setShowRealOnly] = useState(false);
 
-  const seedPage = useCallback((pageIndex: number) => {
-    const startOffset = pageIndex * PAGE_SIZE;
-    const next: string[] = [];
-    for (let i = 0; i < PAGE_SIZE; i++) {
-      const d = daysAgoUTC(startDateRef.current, startOffset + i);
-      next.push(toISODate(d));
-    }
-    return next;
-  }, [PAGE_SIZE]);
+  const seedPage = useCallback(
+    (pageIndex: number) => {
+      const startOffset = pageIndex * PAGE_SIZE;
+      const next: string[] = [];
+      for (let i = 0; i < PAGE_SIZE; i++) {
+        const d = daysAgoUTC(startDateRef.current, startOffset + i);
+        next.push(toISODate(d));
+      }
+      return next;
+    },
+    [PAGE_SIZE]
+  );
 
   const loadMore = useCallback(() => {
     const page = loadedPagesRef.current + 1;
@@ -58,7 +58,6 @@ export function useEntriesFeed(opts: UseEntriesFeedOpts = {}) {
     loadedPagesRef.current = 0;
   }, [seedPage]);
 
-  // realtime listener for recent window
   useEffect(() => {
     const today = startDateRef.current;
     const todayId = toISODate(today);
@@ -85,7 +84,7 @@ export function useEntriesFeed(opts: UseEntriesFeedOpts = {}) {
           }
         } else {
           existsCache.current.set(id, true);
-          coverCache.current.set(id, d.coverUrl ?? null);
+          coverCache.current.set(id, d.thumbCoverUrl ?? d.coverUrl ?? null);
           titleCache.current.set(id, d.title ?? "");
           changed = true;
         }
@@ -96,7 +95,6 @@ export function useEntriesFeed(opts: UseEntriesFeedOpts = {}) {
     return () => unsub();
   }, [DAYS_WINDOW]);
 
-  // lazy loader for older dates (outside realtime window)
   const ensureLoaded = useCallback(async (date: string) => {
     if (existsCache.current.has(date)) return;
     const snap = await getDoc(doc(db, "entries", date));
@@ -104,7 +102,7 @@ export function useEntriesFeed(opts: UseEntriesFeedOpts = {}) {
     existsCache.current.set(date, exists);
     if (exists) {
       const d = snap.data() as any;
-      coverCache.current.set(date, d.coverUrl ?? null);
+      coverCache.current.set(date, d.thumbCoverUrl ?? d.coverUrl ?? null);
       titleCache.current.set(date, d.title ?? "");
     } else {
       coverCache.current.set(date, null);
@@ -136,11 +134,11 @@ export function useEntriesFeed(opts: UseEntriesFeedOpts = {}) {
   };
 }
 
-// helpers used by list cell
 export const formatMDY = (iso: string) => {
   const [y, m, d] = iso.split("-");
   return `${m}-${d}-${y}`;
 };
+
 export const toParts = (iso: string) => {
   const dt = new Date(iso + "T00:00:00Z");
   const mo = dt.toLocaleString("en-US", { month: "short", timeZone: "UTC" }).toUpperCase();

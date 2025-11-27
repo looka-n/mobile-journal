@@ -25,7 +25,6 @@ export default function Index() {
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
-  // Pinch gesture to toggle
   const pinchState = useRef<{ startDist?: number }>({});
   const pan = useRef(
     PanResponder.create({
@@ -59,7 +58,7 @@ export default function Index() {
   ).current;
 
   const renderItem = useCallback(
-    ({ item }: { item: string }) =>
+    ({ item, index }: { item: string; index: number }) =>
       viewMode === "grid" ? (
         <EntryGridCell
           date={item}
@@ -67,6 +66,7 @@ export default function Index() {
           onPress={() => router.push(`/entry/${item}`)}
           size={ITEM_SIZE}
           gap={GAP}
+          index={index}
         />
       ) : (
         <EntryListCard
@@ -74,6 +74,7 @@ export default function Index() {
           cover={getCover(item) ?? undefined}
           title={getTitle(item)}
           onPress={() => router.push(`/entry/${item}`)}
+          index={index}
         />
       ),
     [viewMode, getCover, getTitle, router]
@@ -93,13 +94,16 @@ export default function Index() {
         }}
       />
       <FlatList
-        key={viewMode}                    // force remount when numColumns changes
+        key={viewMode}
         data={data}
         extraData={version}
         keyExtractor={(date) => date}
         numColumns={viewMode === "grid" ? 3 : 1}
         renderItem={renderItem}
-        contentContainerStyle={{ padding: viewMode === "grid" ? GAP : 6, backgroundColor: "#fff" }}
+        contentContainerStyle={{
+          padding: viewMode === "grid" ? GAP : 6,
+          backgroundColor: "#fff",
+        }}
         removeClippedSubviews
         initialNumToRender={PAGE_SIZE}
         windowSize={7}

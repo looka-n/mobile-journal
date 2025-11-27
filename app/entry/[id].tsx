@@ -1,3 +1,4 @@
+import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
@@ -50,6 +51,7 @@ export default function EntryScreen() {
   const [remoteDesc, setRemoteDesc] = useState("");
   const [remotePhotos, setRemotePhotos] = useState<string[]>([]);
   const [remoteCover, setRemoteCover] = useState<string | null>(null);
+  const [remoteThumbCover, setRemoteThumbCover] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
 
@@ -95,11 +97,13 @@ export default function EntryScreen() {
         setRemoteDesc(d.description || "");
         setRemotePhotos(Array.isArray(d.photos) ? d.photos : []);
         setRemoteCover(d.coverUrl || null);
+        setRemoteThumbCover(d.thumbCoverUrl || null);
       } else {
         setRemoteTitle("");
         setRemoteDesc("");
         setRemotePhotos([]);
         setRemoteCover(null);
+        setRemoteThumbCover(null);
       }
       setLoaded(true);
     })();
@@ -136,12 +140,31 @@ export default function EntryScreen() {
     }
   };
 
-  const uploadOne = async (uri: string, index: number) => {
+  const uploadOne = async (
+    uri: string,
+    index: number
+  ): Promise<{ fullUrl: string; thumbUrl: string }> => {
+    // full-size
     const resp = await fetch(uri);
     const blob = await resp.blob();
-    const objectRef = ref(storage, `entries/${currentId}/${Date.now()}_${index}.jpg`);
-    await uploadBytes(objectRef, blob, { contentType: "image/jpeg" });
-    return await getDownloadURL(objectRef);
+    const basePath = `entries/${currentId}/${Date.now()}_${index}`;
+    const fullRef = ref(storage, `${basePath}.jpg`);
+    await uploadBytes(fullRef, blob, { contentType: "image/jpeg" });
+    const fullUrl = await getDownloadURL(fullRef);
+
+    // thumbnail (width ~512)
+    const manip = await ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: 512 } }],
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+    );
+    const thumbResp = await fetch(manip.uri);
+    const thumbBlob = await thumbResp.blob();
+    const thumbRef = ref(storage, `${basePath}_thumb.jpg`);
+    await uploadBytes(thumbRef, thumbBlob, { contentType: "image/jpeg" });
+    const thumbUrl = await getDownloadURL(thumbRef);
+
+    return { fullUrl, thumbUrl };
   };
 
   const deleteRemovedBlobs = async (oldUrls: string[], newUrls: string[]) => {
@@ -163,13 +186,44 @@ export default function EntryScreen() {
     if (!currentId) return;
     try {
       setSaving(true);
-      const newUris = draftPhotos.filter((p) => p.isNew).map((p) => p.uri);
-      const uploaded = await Promise.all(newUris.map(uploadOne));
-      let upIdx = 0;
-      const finalPhotos = draftPhotos.map((p) => (p.isNew ? uploaded[upIdx++] : p.uri));
 
+      const newDrafts = draftPhotos.filter((p) => p.isNew);
+      const uploaded = await Promise.all(newDrafts.map((p, idx) => uploadOne(p.uri, idx)));
+
+      let upIdx = 0;
+      const finalPhotos = draftPhotos.map((p) => {
+        if (p.isNew) {
+          const { fullUrl } = uploaded[upIdx++];
+          return fullUrl;
+        }
+        return p.uri;
+      });
+
+      // full-size cover
       let nextCover: string | null = remoteCover;
-      if (!nextCover || !finalPhotos.includes(nextCover)) nextCover = finalPhotos[0] ?? null;
+      if (!nextCover || !finalPhotos.includes(nextCover)) {
+        nextCover = finalPhotos[0] ?? null;
+      }
+
+      // thumbnail cover
+      let nextThumbCover: string | null = remoteThumbCover;
+
+      if (!nextCover) {
+        nextThumbCover = null;
+      } else {
+        const coverIndex = finalPhotos.indexOf(nextCover);
+        const coverDraft = draftPhotos[coverIndex];
+
+        if (coverDraft?.isNew) {
+          const newIdx = newDrafts.indexOf(coverDraft);
+          if (newIdx >= 0) {
+            nextThumbCover = uploaded[newIdx].thumbUrl;
+          }
+        } else if (!remoteThumbCover || remoteCover !== nextCover) {
+          // existing image as cover but no thumb stored; leave as is (feed will fall back to full cover)
+          nextThumbCover = remoteThumbCover ?? null;
+        }
+      }
 
       const payload: any = {
         id: currentId,
@@ -177,8 +231,10 @@ export default function EntryScreen() {
         description: markdown,
         photos: finalPhotos,
         coverUrl: nextCover,
+        thumbCoverUrl: nextThumbCover ?? null,
         updatedAt: serverTimestamp(),
       };
+
       await setDoc(doc(db, "entries", currentId), payload, { merge: true });
 
       await deleteRemovedBlobs(remotePhotos, finalPhotos);
@@ -187,6 +243,7 @@ export default function EntryScreen() {
       setRemoteDesc(payload.description);
       setRemotePhotos(finalPhotos);
       setRemoteCover(nextCover);
+      setRemoteThumbCover(nextThumbCover ?? null);
 
       setIsEditing(false);
       Alert.alert("Saved", "Your entry has been saved.");
@@ -228,9 +285,11 @@ export default function EntryScreen() {
       {!isEditing && (
         <View style={{ gap: 12 }}>
           <Text style={styles.title}>{remoteTitle || "Untitled"}</Text>
+
           <View style={styles.dividerContainer}>
             <View style={styles.divider} />
           </View>
+
           <ScrollView
             horizontal
             pagingEnabled
@@ -251,6 +310,7 @@ export default function EntryScreen() {
               />
             ))}
           </ScrollView>
+
           {remotePhotos.length > 1 && (
             <View style={styles.dotsWrap}>
               {remotePhotos.map((_, i) => (
@@ -258,6 +318,7 @@ export default function EntryScreen() {
               ))}
             </View>
           )}
+
           <Markdown style={markdownStyles}>{remoteDesc || ""}</Markdown>
         </View>
       )}
@@ -271,9 +332,11 @@ export default function EntryScreen() {
             style={styles.titleInput}
             placeholderTextColor="#9ca3af"
           />
+
           <View style={styles.dividerContainer}>
             <View style={styles.divider} />
           </View>
+
           {!!displayPhotos.length && (
             <>
               <ScrollView
@@ -296,6 +359,7 @@ export default function EntryScreen() {
                   />
                 ))}
               </ScrollView>
+
               {displayPhotos.length > 1 && (
                 <View style={styles.dotsWrap}>
                   {displayPhotos.map((_, i) => (
@@ -305,6 +369,7 @@ export default function EntryScreen() {
               )}
             </>
           )}
+
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -322,18 +387,27 @@ export default function EntryScreen() {
                 </Pressable>
               </View>
             ))}
+
             <Pressable style={styles.cameraTile} onPress={pickImages}>
               <Text style={{ fontSize: 28, color: "#6b7280" }}>📷</Text>
             </Pressable>
           </ScrollView>
+
           <View style={styles.tabBar}>
-            <Pressable onPress={() => setShowPreview(false)} style={[styles.tab, !showPreview && styles.tabActive]}>
+            <Pressable
+              onPress={() => setShowPreview(false)}
+              style={[styles.tab, !showPreview && styles.tabActive]}
+            >
               <Text style={[styles.tabText, !showPreview && styles.tabTextActive]}>Write</Text>
             </Pressable>
-            <Pressable onPress={() => setShowPreview(true)} style={[styles.tab, showPreview && styles.tabActive]}>
+            <Pressable
+              onPress={() => setShowPreview(true)}
+              style={[styles.tab, showPreview && styles.tabActive]}
+            >
               <Text style={[styles.tabText, showPreview && styles.tabTextActive]}>Preview</Text>
             </Pressable>
           </View>
+
           {!showPreview ? (
             <TextInput
               value={markdown}
@@ -345,6 +419,7 @@ export default function EntryScreen() {
           ) : (
             <Markdown style={markdownStyles}>{markdown || "_Nothing yet..._"}</Markdown>
           )}
+
           <Button title={saving ? "Saving..." : "Save"} onPress={onSave} disabled={saving} />
         </View>
       )}
@@ -356,6 +431,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff", padding: 16, gap: 12 },
   title: { fontSize: 24, fontWeight: "700" },
   body: { fontSize: 16, lineHeight: 22, color: "#111827" },
+
   label: { fontSize: 12, fontWeight: "600", color: "#374151" },
   input: {
     borderWidth: 1,
@@ -367,11 +443,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
   multiline: { height: 140, textAlignVertical: "top" },
+
   dotsWrap: { flexDirection: "row", alignSelf: "center", gap: 6, marginTop: 8 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#d1d5db" },
   dotActive: { backgroundColor: "#111827" },
+
   editThumbWrap: { marginRight: 10, width: 120, height: 120 },
   editThumb: { width: 120, height: 120, borderRadius: 10, backgroundColor: "#e5e7eb" },
+
   removeBtn: {
     position: "absolute",
     top: 6,
@@ -384,8 +463,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   removeTxt: { color: "#fff", fontWeight: "700", lineHeight: 16 },
+
   dividerContainer: { paddingBottom: 20 },
   divider: { height: 2, backgroundColor: "#d1d5db", width: "90%", borderRadius: 1 },
+
   cameraTile: {
     width: 120,
     height: 120,
@@ -397,6 +478,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 10,
   },
+
   titleInput: {
     fontSize: 24,
     fontWeight: "700",
@@ -405,6 +487,7 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     borderWidth: 0,
   },
+
   tabBar: {
     flexDirection: "row",
     alignSelf: "center",
