@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams } from "expo-router";
@@ -7,7 +8,6 @@ import { deleteObject, getDownloadURL, ref, uploadBytes } from "firebase/storage
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
-  Button,
   Dimensions,
   Image,
   PanResponder,
@@ -16,7 +16,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View,
+  View
 } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { auth, db, storage } from "../../firebase/FirebaseConfig";
@@ -273,12 +273,33 @@ export default function EntryScreen() {
       <Stack.Screen
         options={{
           title: display || "Entry",
-          headerRight: () =>
-            isEditing ? (
-              <Button title="Cancel" onPress={() => setIsEditing(false)} />
-            ) : (
-              <Button title="Edit" onPress={() => setIsEditing(true)} />
-            ),
+          animation: "fade_from_bottom", // fade + slight upward motion
+          headerRight: () => (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 18, paddingRight: 4 }}>
+              {isEditing ? (
+                <>
+                  {/* Cancel icon */}
+                  <Pressable onPress={() => setIsEditing(false)}>
+                    <Ionicons name="close" size={26} color="#111" />
+                  </Pressable>
+
+                  {/* Save icon */}
+                  <Pressable onPress={onSave} disabled={saving}>
+                    <Ionicons
+                      name="checkmark"
+                      size={28}
+                      color={saving ? "#9ca3af" : "#2563eb"}
+                      style={{ opacity: saving ? 0.5 : 1 }}
+                    />
+                  </Pressable>
+                </>
+              ) : (
+                <Pressable onPress={() => setIsEditing(true)}>
+                  <Ionicons name="pencil" size={22} color="#111" />
+                </Pressable>
+              )}
+            </View>
+          ),
         }}
       />
 
@@ -419,8 +440,6 @@ export default function EntryScreen() {
           ) : (
             <Markdown style={markdownStyles}>{markdown || "_Nothing yet..._"}</Markdown>
           )}
-
-          <Button title={saving ? "Saving..." : "Save"} onPress={onSave} disabled={saving} />
         </View>
       )}
     </View>

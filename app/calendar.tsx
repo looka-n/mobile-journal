@@ -1,20 +1,21 @@
 import DateTimePicker, {
-  DateTimePickerEvent,
+    DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
 import { Stack, useRouter } from "expo-router";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Button,
-  Dimensions,
-  FlatList,
-  ImageBackground,
-  PanResponder,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
+    Button,
+    Dimensions,
+    FlatList,
+    ImageBackground,
+    PanResponder,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
 import { EntryGridCell } from "../components/EntryGridCell";
 import { EntryListCard } from "../components/EntryListCard";
@@ -41,15 +42,9 @@ type MonthDef = {
   monthIndex: number;
   label: string;
   key: string;
-  offset: number; // 0 = current month, 1 = previous, etc.
 };
 
 const toISO = (d: Date) => d.toISOString().slice(0, 10);
-
-const todayUTC = () => {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-};
 
 const buildMonthMatrix = (year: number, monthIndex: number): DayCell[] => {
   const first = new Date(Date.UTC(year, monthIndex, 1));
@@ -78,12 +73,14 @@ const formatMonthYear = (year: number, monthIndex: number) => {
   });
 };
 
-const buildInitialMonths = (today: Date, count: number): MonthDef[] => {
+// Only past + current months; oldest at top, current month at bottom
+const buildPastMonths = (today: Date, monthsBack = 12): MonthDef[] => {
+  const res: MonthDef[] = [];
   const baseYear = today.getUTCFullYear();
   const baseMonth = today.getUTCMonth();
-  const res: MonthDef[] = [];
-  for (let off = 0; off < count; off++) {
-    const d = new Date(Date.UTC(baseYear, baseMonth - off, 1));
+
+  for (let offset = monthsBack - 1; offset >= 0; offset--) {
+    const d = new Date(Date.UTC(baseYear, baseMonth - offset, 1));
     const y = d.getUTCFullYear();
     const m = d.getUTCMonth();
     res.push({
@@ -91,7 +88,6 @@ const buildInitialMonths = (today: Date, count: number): MonthDef[] => {
       monthIndex: m,
       label: formatMonthYear(y, m),
       key: `${y}-${m}`,
-      offset: off,
     });
   }
   return res;
@@ -212,31 +208,26 @@ export default function Index() {
 
   // --------- CALENDAR DATA ---------
 
-  const [today] = useState<Date>(() => todayUTC());
+  const today = useMemo(() => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  }, []);
   const todayIso = toISO(today);
 
-  // months: current month at top, older below; infinite scroll down
-  const [months, setMonths] = useState<MonthDef[]>(() =>
-    buildInitialMonths(today, 6)
-  );
+  // Only past + current months, oldest at top, current at bottom
+  const months = useMemo(() => buildPastMonths(today, 12), [today]);
 
-  const [calendarCovers, setCalendarCovers] = useState<Record<string, string | null>>(
-    {}
-  );
+  const [calendarCovers, setCalendarCovers] = useState<Record<string, string | null>>({});
 
-  // load all covers spanning oldest -> current month
+  // load all covers in the months window
   useEffect(() => {
     if (!months.length) return;
-    const oldest = months[months.length - 1];
-    const latest = months[0];
-
-    const first = new Date(Date.UTC(oldest.year, oldest.monthIndex, 1));
-    const afterLast = new Date(
-      Date.UTC(latest.year, latest.monthIndex + 1, 1)
-    );
+    const first = new Date(Date.UTC(months[0].year, months[0].monthIndex, 1));
+    const lastMonth = months[months.length - 1];
+    const afterLast = new Date(Date.UTC(lastMonth.year, lastMonth.monthIndex + 1, 1));
 
     const startId = toISO(first);
-    const endId = toISO(new Date(afterLast.getTime() - 1));
+    const endId = toISO(new Date(afterLast.getTime() - 1)); // up to end of current month
 
     const q = query(
       collection(db, "entries"),
@@ -260,29 +251,16 @@ export default function Index() {
 
   const isToday = (iso: string) => iso === todayIso;
 
-  // infinite scroll: append more older months when reaching bottom
-  const loadMoreMonths = () => {
-    setMonths((prev) => {
-      const baseYear = today.getUTCFullYear();
-      const baseMonth = today.getUTCMonth();
-      const maxOffset = prev.reduce((m, x) => Math.max(m, x.offset), 0);
-      const batch = 6;
-      const res: MonthDef[] = [];
-      for (let off = maxOffset + 1; off <= maxOffset + batch; off++) {
-        const d = new Date(Date.UTC(baseYear, baseMonth - off, 1));
-        const y = d.getUTCFullYear();
-        const m = d.getUTCMonth();
-        res.push({
-          year: y,
-          monthIndex: m,
-          label: formatMonthYear(y, m),
-          key: `${y}-${m}`,
-          offset: off,
-        });
-      }
-      return prev.concat(res);
-    });
-  };
+  // scroll to bottom (current month) when entering calendar view
+  const calendarScrollRef = useRef<ScrollView | null>(null);
+  useEffect(() => {
+    if (viewMode === "calendar" && calendarScrollRef.current) {
+      // slight timeout to allow layout
+      setTimeout(() => {
+        calendarScrollRef.current?.scrollToEnd({ animated: false });
+      }, 0);
+    }
+  }, [viewMode]);
 
   // --------- HEADER VIEW BUTTON ---------
 
@@ -310,18 +288,16 @@ export default function Index() {
       />
 
       {viewMode === "calendar" ? (
-        <FlatList
+        <ScrollView
+          ref={calendarScrollRef}
           style={styles.calendarScreen}
           contentContainerStyle={styles.calScrollOuter}
-          data={months}
-          keyExtractor={(m) => m.key}
-          onEndReached={loadMoreMonths}
-          onEndReachedThreshold={0.3}
-          renderItem={({ item }) => {
-            const days = buildMonthMatrix(item.year, item.monthIndex);
+        >
+          {months.map((month) => {
+            const days = buildMonthMatrix(month.year, month.monthIndex);
             return (
-              <View style={styles.monthBlock}>
-                <Text style={styles.calMonthLabel}>{item.label}</Text>
+              <View key={month.key} style={styles.monthBlock}>
+                <Text style={styles.calMonthLabel}>{month.label}</Text>
 
                 <View style={styles.calWeekRow}>
                   {DAYS.map((d) => (
@@ -335,7 +311,7 @@ export default function Index() {
                   {days.map((cell) => {
                     const cover = calendarCovers[cell.iso];
                     const todayFlag = isToday(cell.iso);
-                    const isFuture = cell.iso > todayIso; // disable dates after today
+                    const isFuture = cell.iso > todayIso; // disable days after today
 
                     const dayInnerCommon = [
                       styles.calDayInner,
@@ -344,7 +320,7 @@ export default function Index() {
                     ];
 
                     const onPress = () => {
-                      if (isFuture) return;
+                      if (isFuture) return; // do nothing for future dates
                       router.push(`/entry/${cell.iso}`);
                     };
 
@@ -384,8 +360,8 @@ export default function Index() {
                 </View>
               </View>
             );
-          }}
-        />
+          })}
+        </ScrollView>
       ) : (
         <FlatList
           key={viewMode}
