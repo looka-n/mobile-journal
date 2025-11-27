@@ -1,6 +1,16 @@
+import DateTimePicker, {
+  DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import { Stack, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { Button, Dimensions, FlatList, PanResponder, View } from "react-native";
+import {
+  Button,
+  Dimensions,
+  FlatList,
+  PanResponder,
+  Platform,
+  View,
+} from "react-native";
 import { EntryGridCell } from "../components/EntryGridCell";
 import { EntryListCard } from "../components/EntryListCard";
 import { useEntriesFeed } from "../hooks/useEntriesFeed";
@@ -25,6 +35,37 @@ export default function Index() {
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
+  // jump-to-date picker state
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerDate, setPickerDate] = useState(new Date());
+
+  const goToDate = (date: Date) => {
+    // Normalized ISO YYYY-MM-DD
+    const iso = date.toISOString().slice(0, 10);
+    router.push(`/entry/${iso}`);
+  };
+
+  const handlePickerChange = (event: DateTimePickerEvent, date?: Date) => {
+    if (Platform.OS === "android") {
+      if (event.type === "dismissed") {
+        setShowPicker(false);
+        return;
+      }
+      if (event.type === "set" && date) {
+        setShowPicker(false);
+        setPickerDate(date);
+        goToDate(date);
+      }
+    } else {
+      // iOS: treat selection as final for now
+      if (!date) return;
+      setShowPicker(false);
+      setPickerDate(date);
+      goToDate(date);
+    }
+  };
+
+  // Pinch gesture to toggle grid/list
   const pinchState = useRef<{ startDist?: number }>({});
   const pan = useRef(
     PanResponder.create({
@@ -86,13 +127,19 @@ export default function Index() {
         options={{
           title: "Remark",
           headerRight: () => (
-            <Button
-              title={viewMode === "grid" ? "List" : "Grid"}
-              onPress={() => setViewMode((m) => (m === "grid" ? "list" : "grid"))}
-            />
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Button title="Jump" onPress={() => setShowPicker(true)} />
+              <Button
+                title={viewMode === "grid" ? "List" : "Grid"}
+                onPress={() =>
+                  setViewMode((m) => (m === "grid" ? "list" : "grid"))
+                }
+              />
+            </View>
           ),
         }}
       />
+
       <FlatList
         key={viewMode}
         data={data}
@@ -112,6 +159,15 @@ export default function Index() {
         viewabilityConfig={viewabilityConfig}
         onViewableItemsChanged={onViewableItemsChanged}
       />
+
+      {showPicker && (
+        <DateTimePicker
+          value={pickerDate}
+          mode="date"
+          display={Platform.OS === "ios" ? "inline" : "default"}
+          onChange={handlePickerChange}
+        />
+      )}
     </View>
   );
 }
