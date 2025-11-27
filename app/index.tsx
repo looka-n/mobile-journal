@@ -5,6 +5,7 @@ import { Stack, useRouter } from "expo-router";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Animated,
   Button,
   Dimensions,
   FlatList,
@@ -43,6 +44,8 @@ type MonthDef = {
   key: string;
   offset: number; // 0 = current month, 1 = previous, etc.
 };
+
+type ViewMode = "calendar" | "grid" | "list";
 
 const toISO = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -97,6 +100,13 @@ const buildInitialMonths = (today: Date, count: number): MonthDef[] => {
   return res;
 };
 
+// For deciding forward vs backward
+const modeOrder: Record<ViewMode, number> = {
+  calendar: 0,
+  grid: 1,
+  list: 2,
+};
+
 export default function Index() {
   const router = useRouter();
 
@@ -111,7 +121,7 @@ export default function Index() {
     getTitle,
   } = useEntriesFeed({ pageSize: PAGE_SIZE, daysWindow: 120 });
 
-  const [viewMode, setViewMode] = useState<"calendar" | "grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
   // jump-to-date picker
   const [showPicker, setShowPicker] = useState(false);
@@ -141,6 +151,19 @@ export default function Index() {
     }
   };
 
+  // ---------- Zoom animation container ----------
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const playTransition = (direction: "forward" | "backward") => {
+    const startScale = direction === "forward" ? 0.97 : 1.03;
+    scale.setValue(startScale);
+    Animated.timing(scale, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  };
+
   // pinch gesture: Calendar <-> Grid <-> List
   const pinchState = useRef<{ startDist?: number }>({});
   const pan = useRef(
@@ -158,21 +181,34 @@ export default function Index() {
         }
         const delta = dist - (pinchState.current.startDist || 0);
 
-        // zoom IN (calendar -> grid -> list)
         if (delta > 30) {
-          setViewMode((m) => {
-            if (m === "calendar") return "grid";
-            if (m === "grid") return "list";
-            return m;
+          // zoom IN (calendar -> grid -> list)
+          setViewMode((prev) => {
+            let next: ViewMode = prev;
+            if (prev === "calendar") next = "grid";
+            else if (prev === "grid") next = "list";
+
+            if (next !== prev) {
+              const dir: "forward" | "backward" =
+                modeOrder[next] > modeOrder[prev] ? "forward" : "backward";
+              playTransition(dir);
+            }
+            return next;
           });
           pinchState.current.startDist = undefined;
-        }
-        // zoom OUT (list -> grid -> calendar)
-        else if (delta < -30) {
-          setViewMode((m) => {
-            if (m === "list") return "grid";
-            if (m === "grid") return "calendar";
-            return m;
+        } else if (delta < -30) {
+          // zoom OUT (list -> grid -> calendar)
+          setViewMode((prev) => {
+            let next: ViewMode = prev;
+            if (prev === "list") next = "grid";
+            else if (prev === "grid") next = "calendar";
+
+            if (next !== prev) {
+              const dir: "forward" | "backward" =
+                modeOrder[next] > modeOrder[prev] ? "forward" : "backward";
+              playTransition(dir);
+            }
+            return next;
           });
           pinchState.current.startDist = undefined;
         }
@@ -290,13 +326,23 @@ export default function Index() {
     viewMode === "calendar" ? "Grid" : viewMode === "grid" ? "List" : "Calendar";
 
   const cycleViewMode = () => {
-    setViewMode((m) =>
-      m === "calendar" ? "grid" : m === "grid" ? "list" : "calendar"
-    );
+    setViewMode((prev) => {
+      const next: ViewMode =
+        prev === "calendar" ? "grid" : prev === "grid" ? "list" : "calendar";
+
+      const dir: "forward" | "backward" =
+        modeOrder[next] > modeOrder[prev] ? "forward" : "backward";
+
+      playTransition(dir);
+      return next;
+    });
   };
 
   return (
-    <View style={{ flex: 1 }} {...pan.panHandlers}>
+    <Animated.View
+      style={{ flex: 1, transform: [{ scale }] }}
+      {...pan.panHandlers}
+    >
       <Stack.Screen
         options={{
           title: "Remark",
@@ -360,13 +406,13 @@ export default function Index() {
                         {cover && !isFuture ? (
                           <ImageBackground
                             source={{ uri: cover }}
-                            style={dayInnerCommon}
+                            style={dayInnerCommon as any}
                             imageStyle={styles.calThumbImage}
                           >
                             <Text style={styles.calDayNumberOnImage}>{cell.day}</Text>
                           </ImageBackground>
                         ) : (
-                          <View style={[...dayInnerCommon, styles.calNoThumbBox]}>
+                          <View style={[...(dayInnerCommon as any), styles.calNoThumbBox]}>
                             <Text
                               style={[
                                 styles.calDayNumberPlain,
@@ -416,7 +462,7 @@ export default function Index() {
           onChange={handlePickerChange}
         />
       )}
-    </View>
+    </Animated.View>
   );
 }
 
