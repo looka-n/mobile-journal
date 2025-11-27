@@ -149,21 +149,28 @@ export default function EntryScreen() {
         p.isNew ? uploaded[upIdx++].fullUrl : p.uri
       );
 
-      let nextCover = remoteCover;
-      if (!nextCover || !finalPhotos.includes(nextCover)) {
-        nextCover = finalPhotos[0] ?? null;
-      }
+      // ✅ First image is ALWAYS the cover
+      const nextCover: string | null = finalPhotos[0] ?? null;
 
-      let nextThumbCover = remoteThumbCover;
-      if (!nextCover) {
-        nextThumbCover = null;
-      } else {
-        const coverIndex = finalPhotos.indexOf(nextCover);
-        const coverDraft = draftPhotos[coverIndex];
+      // ✅ Thumbnail is tied to that same first image
+      let nextThumbCover: string | null = null;
+      if (nextCover) {
+        // first draft photo corresponds to first final photo
+        const coverDraft = draftPhotos[0];
 
         if (coverDraft?.isNew) {
+          // find its uploaded thumb
           const newIdx = newDrafts.indexOf(coverDraft);
-          if (newIdx >= 0) nextThumbCover = uploaded[newIdx].thumbUrl;
+          if (newIdx >= 0) {
+            nextThumbCover = uploaded[newIdx].thumbUrl;
+          }
+        } else if (remoteCover === nextCover) {
+          // same cover as before → reuse existing thumb if we have one
+          nextThumbCover = remoteThumbCover ?? null;
+        } else {
+          // cover changed to a different existing photo → drop thumb
+          // feed will fall back to full cover image (which is correct)
+          nextThumbCover = null;
         }
       }
 
